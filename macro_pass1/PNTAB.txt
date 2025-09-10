@@ -1,0 +1,6 @@
+INNER:
+1	&P
+2	&Q
+OUTER:
+1	&X
+2	&Y
