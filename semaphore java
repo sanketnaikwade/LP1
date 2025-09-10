@@ -1,0 +1,108 @@
+package Assi1.Semaphore;
+
+public class b2 {
+
+    // Buffer mem
+    static int[] buffer = new int[10];
+    static int in = 0;  
+    static int out = 0;  
+
+    // Semaphores
+    static volatile int e = 10;  
+    static volatile int f = 0;   
+    static volatile int s = 1;  
+
+    static int item = 0; 
+
+    // wait 
+    public static void waitSem(String sem) {
+        switch (sem) {
+            case "e":
+                while (e <= 0); 
+                e--;
+                break;
+            case "f":
+                while (f <= 0);
+                f--;
+                break;
+            case "s":
+                while (s <= 0);
+                s--;
+                break;
+        }
+    }
+
+    // signal 
+    public static void signalSem(String sem) {
+        switch (sem) {
+            case "e":
+                e++;
+                break;
+            case "f":
+                f++;
+                break;
+            case "s":
+                s++;
+                break;
+        }
+    }
+
+    // Producer 
+    public static void producer() {
+        for (int i = 0; i < 20; i++) {
+            waitSem("e"); 
+            waitSem("s"); 
+
+            // critical section: produce
+            buffer[in] = i;
+            System.out.println("Produced: " + i + " at index " + in);
+//            item++;
+            in = (in + 1) % 10; 
+
+            signalSem("s"); 
+            signalSem("f"); 
+
+            try {
+                Thread.sleep(100); 
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    // Consumer 
+    public static void consumer() {
+        for (int i = 0; i < 20; i++) {
+            waitSem("f"); 
+            waitSem("s"); 
+
+            // critical section: consume
+            int consumed = buffer[out];
+            System.out.println("Consumed: " + consumed + " from index " + out);
+            out = (out + 1) % 10; 
+
+            signalSem("s"); 
+            signalSem("e"); 
+
+            try {
+                Thread.sleep(90); 
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        Thread p = new Thread(new Runnable() {
+            @Override
+            public void run(){
+                producer();
+            }
+        });
+        // Thread p = new Thread(() -> producer());
+        Thread c = new Thread(() -> consumer());
+        c.start();
+
+        p.start();
+    }
+}
