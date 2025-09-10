@@ -1,0 +1,351 @@
+#include <iostream>
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <sstream> // Required for string stream parsing
+
+using namespace std;
+
+class Asm
+{
+private:
+    // Unchanged data members...
+    unordered_map<string, int> symbolTable;
+    vector<pair<string, int>> literalTable;
+    vector<int> poolTable;
+    unordered_map<string, pair<string, int>> IS;
+    unordered_map<string, pair<string, int>> AD;
+    unordered_map<string, pair<string, int>> DL;
+    unordered_map<string, int> REG_CC;
+    vector<vector<string>> inputs;
+    int currentAddress;
+    int literalPoolIndex;
+    vector<string> intermediateCode;
+
+    // Helper to find symbol index (for more stable IC)
+    int getSymbolIndex(const string& symbol) {
+        // This is a simplified way to get a consistent ID for a symbol
+        // In a real assembler, this might be an actual index into a vector
+        static unordered_map<string, int> symbol_to_id;
+        static int next_id = 1;
+        if (symbol_to_id.find(symbol) == symbol_to_id.end()) {
+            symbol_to_id[symbol] = next_id++;
+        }
+        return symbol_to_id[symbol];
+    }
+
+public:
+    Asm()
+    {
+        // --- INSTRUCTION SET ---
+        IS["STOP"] = {"IS", 0};
+        IS["ADD"] = {"IS", 1};
+        IS["SUB"] = {"IS", 2};
+        IS["MUL"] = {"IS", 3};
+        IS["MULT"] = {"IS", 3}; // Fixed: Added MULT
+        IS["MOVER"] = {"IS", 4};
+        IS["MOVEM"] = {"IS", 5};
+        IS["COMP"] = {"IS", 6};
+        IS["BC"] = {"IS", 7};
+        IS["DIV"] = {"IS", 8};
+        IS["READ"] = {"IS", 9};
+        IS["PRINT"] = {"IS", 10};
+
+        // --- ASSEMBLER DIRECTIVES ---
+        AD["START"] = {"AD", 1};
+        AD["END"] = {"AD", 2};
+        AD["ORIGIN"] = {"AD", 3};
+        AD["EQU"] = {"AD", 4};
+        AD["LTORG"] = {"AD", 5};
+
+        // --- DECLARATIVE STATEMENTS ---
+        DL["DC"] = {"DL", 1};
+        DL["DS"] = {"DL", 2};
+
+        // --- REGISTERS & CONDITION CODES ---
+        REG_CC["AREG"] = 1;
+        REG_CC["BREG"] = 2;
+        REG_CC["CREG"] = 3;
+        REG_CC["DREG"] = 4;
+        REG_CC["LT"] = 1;
+        REG_CC["LE"] = 2;
+        REG_CC["EQ"] = 3;
+        REG_CC["GT"] = 4;
+        REG_CC["GE"] = 5;
+        REG_CC["ANY"] = 6;
+
+        currentAddress = 0;
+        literalPoolIndex = 0;
+        poolTable.push_back(0); // Initial pool table entry
+    }
+
+    void setInput(vector<vector<string>> commands)
+    {
+        inputs = commands;
+    }
+
+    // Fixed: Expression evaluation now handles "symbol + number"
+    int evaluateExpression(string expr)
+    {
+        size_t plus_pos = expr.find('+');
+        if (plus_pos != string::npos)
+        {
+            string symbol = expr.substr(0, plus_pos);
+            // Trim whitespace from symbol
+            symbol.erase(symbol.find_last_not_of(" \t\n\r") + 1);
+            int offset = stoi(expr.substr(plus_pos + 1));
+            if (symbolTable.find(symbol) != symbolTable.end())
+            {
+                return symbolTable[symbol] + offset;
+            }
+            return offset; // Should handle error if symbol not found
+        }
+        
+        if (symbolTable.find(expr) != symbolTable.end())
+        {
+            return symbolTable[expr];
+        }
+
+        // Check if it's a number
+        try {
+            return stoi(expr);
+        } catch (const std::invalid_argument& ia) {
+            // Not a number, assume symbol not yet defined
+            return -1; // Indicate error or forward reference
+        }
+    }
+
+    string getOperandCode(const string& operand)
+    {
+        if (operand == "--" || operand.empty())
+        {
+            return "(C,--)";
+        }
+        if (REG_CC.count(operand))
+        {
+            return "(" + to_string(REG_CC[operand]) + ")";
+        }
+        if (operand[0] == '=')
+        {
+            literalTable.push_back({operand, -1});
+            return "(L," + to_string(literalTable.size() -1) + ")";
+        }
+        // Check if it's a constant
+        bool is_numeric = true;
+        for(char c : operand) {
+            if(!isdigit(c)) {
+                is_numeric = false;
+                break;
+            }
+        }
+        if(is_numeric) {
+            return "(C," + operand + ")";
+        }
+        // Otherwise, it's a symbol
+        if (symbolTable.find(operand) == symbolTable.end()) {
+            symbolTable[operand] = -1; // Placeholder for forward reference
+        }
+        return "(S," + to_string(getSymbolIndex(operand)) + ")";
+    }
+
+    void processLiterals()
+    {
+        string ic_line = "(AD,05) (C,--)";
+        intermediateCode.push_back(ic_line);
+        for (int i = literalPoolIndex; i < literalTable.size(); ++i)
+        {
+            literalTable[i].second = currentAddress;
+            string literalValue = literalTable[i].first.substr(2, literalTable[i].first.length() - 3);
+            intermediateCode.push_back(to_string(currentAddress) + ") (DL,01) (C," + literalValue +")");
+            currentAddress++;
+        }
+        poolTable.push_back(literalTable.size());
+        literalPoolIndex = literalTable.size();
+    }
+
+    void processPassOne()
+    {
+        bool start_found = false;
+        for (const auto &line : inputs)
+        {
+            string label = line[0];
+            string instruction = line[1];
+            string operand1 = line[2];
+            string operand2 = line[3];
+            
+            // Set initial address from START if not already set
+            if(instruction == "START" && !start_found) {
+                currentAddress = evaluateExpression(operand1);
+                start_found = true;
+            }
+
+            // Process label
+            if (!label.empty() && label != "--")
+            {
+                if(symbolTable.count(label) && symbolTable[label] != -1) {
+                    cout << "ERROR: Duplicate symbol definition for " << label << endl;
+                }
+                symbolTable[label] = currentAddress;
+            }
+
+            // Generate Intermediate Code
+            string code;
+            if (IS.count(instruction))
+            {
+                code = to_string(currentAddress) + ") (" + IS[instruction].first + "," + to_string(IS[instruction].second) + ") ";
+                code += getOperandCode(operand1) + " " + getOperandCode(operand2);
+                intermediateCode.push_back(code);
+                currentAddress++;
+            }
+            else if (AD.count(instruction))
+            {
+                if (instruction == "START") {
+                    code = "(AD,01) (C," + operand1 + ")";
+                    intermediateCode.push_back(code);
+                } else if (instruction == "END") {
+                    processLiterals(); // Process any remaining literals
+                    code = "(AD,02) (C,--)";
+                    intermediateCode.push_back(code);
+                    break; // End of assembly
+                } else if (instruction == "ORIGIN") {
+                    currentAddress = evaluateExpression(operand1);
+                    code = "(AD,03) (C," + to_string(currentAddress) + ")";
+                    intermediateCode.push_back(code);
+                } else if (instruction == "EQU") {
+                    symbolTable[label] = evaluateExpression(operand1);
+                    code = "(AD,04) (S," + to_string(getSymbolIndex(label)) + ")(S," + to_string(getSymbolIndex(operand1)) + ")";
+                    intermediateCode.push_back(code);
+                } else if (instruction == "LTORG") {
+                    processLiterals();
+                }
+            }
+            else if (DL.count(instruction))
+            {
+                code = to_string(currentAddress) + ") (" + DL[instruction].first + "," + to_string(DL[instruction].second) + ") ";
+                code += getOperandCode(operand1);
+                intermediateCode.push_back(code);
+
+                if (instruction == "DC")
+                {
+                    currentAddress++;
+                }
+                else if (instruction == "DS")
+                {
+                    currentAddress += stoi(operand1);
+                }
+            }
+        }
+    }
+
+
+    void showTables()
+    {
+        cout << "--- INTERMEDIATE CODE ---" << endl;
+        for (const auto &code : intermediateCode)
+        {
+            cout << code << endl;
+        }
+
+        cout << "\n--- SYMBOL TABLE ---" << endl;
+        cout << "Symbol\tAddress" << endl;
+        for (const auto &entry : symbolTable)
+        {
+            if (entry.second != -1) { // Don't show unresolved forward refs if any remain
+                 cout << entry.first << "\t" << entry.second << endl;
+            }
+        }
+
+        cout << "\n--- LITERAL TABLE ---" << endl;
+        cout << "Index\tLiteral\tAddress" << endl;
+        for (int i = 0; i < literalTable.size(); ++i)
+        {
+            cout << i << "\t" << literalTable[i].first << "\t" << literalTable[i].second << endl;
+        }
+
+        cout << "\n--- POOL TABLE ---" << endl;
+        for (const auto &poolIndex : poolTable)
+        {
+            cout << "#" << poolIndex << endl;
+        }
+    }
+};
+
+int main()
+{
+    Asm assembler;
+
+    vector<vector<string>> commands = {
+        {"", "START", "200", ""},
+        {"", "MOVER", "AREG", "='5'"},
+        {"", "MOVEM", "AREG", "A"},
+        {"LOOP", "MOVER", "AREG", "A"},
+        {"", "MOVER", "CREG", "B"},
+        {"", "ADD", "CREG", "='1'"},
+        {"", "MOVER", "AREG", "A"},
+        {"", "MOVER", "CREG", "B"},
+        {"", "MOVER", "AREG", "A"},
+        {"", "MOVER", "CREG", "B"},
+        {"", "MOVER", "AREG", "A"},
+        {"", "BC", "ANY", "NEXT"},
+        {"", "LTORG", "", ""},
+        {"", "MOVER", "AREG", "A"},
+        {"NEXT", "SUB", "AREG", "='1'"},
+        {"", "BC", "LT", "BACK"},
+        {"LAST", "STOP", "", ""},
+        {"", "ORIGIN", "LOOP+2", ""},
+        {"", "MULT", "CREG", "B"},
+        {"", "ORIGIN", "LAST+1", ""},
+        {"A", "DS", "1", ""},
+        {"BACK", "EQU", "LOOP", ""},
+        {"B", "DS", "1", ""},
+        {"", "END", "", ""}
+
+
+
+        // Test Case 2
+        // {"", "START", "100", ""},
+        // {"A", "DS", "3", ""},
+        // {"L1", "MOVER", "AREG", "B"},
+        // {"", "ADD", "AREG", "C"},
+        // {"", "MOVEM", "AREG", "D"},
+        // {"D", "EQU", "A+1", ""},
+        // {"L2", "PRINT", "D", ""},
+        // {"", "ORIGIN", "A-1", ""},
+        // {"C", "DC", "'5'", ""},
+        // {"", "ORIGIN", "L2+1", ""},
+        // {"", "STOP", "", ""},
+        // {"B", "DC", "'19'", ""},
+        // {"", "END", "L1", ""}
+
+
+        // Test Case 3
+        // {"", "START", "101", ""},
+        // {"", "READ", "N", ""},
+        // {"", "MOVER", "BREG", "ONE"},
+        // {"", "MOVEM", "BREG", "TERM"},
+        // {"AGAIN", "MULT", "BREG", "TERM"},
+        // {"", "MOVER", "CREG", "TERM"},
+        // {"", "ADD", "CREG", "ONE"},
+        // {"", "MOVEM", "CREG", "TERM"},
+        // {"", "COMP", "CREG", "N"},
+        // {"", "BC", "LE", "AGAIN"},
+        // {"", "DIV", "BREG", "TWO"},
+        // {"", "MOVEM", "BREG", "RESULT"},
+        // {"", "PRINT", "RESULT", ""},
+        // {"", "STOP", "", ""},
+        // {"N", "DS", "1", ""},
+        // {"RESULT", "DS", "1", ""},
+        // {"ONE", "DC", "'1'", ""},
+        // {"TERM", "DS", "1", ""},
+        // {"TWO", "DC", "'2'", ""},
+        // {"", "END", "", ""}
+
+
+};
+
+    assembler.setInput(commands);
+    assembler.processPassOne();
+    assembler.showTables(); // Fixed: Added call to show output
+
+    return 0;
+}
