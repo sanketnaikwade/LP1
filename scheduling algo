@@ -1,0 +1,485 @@
+#include <iostream>
+#include <vector>
+#include <iomanip>
+#include <queue>
+#include <algorithm>
+#include <numeric>
+
+using namespace std;
+
+class Process {
+public:
+    int id;
+    int arrivalTime;
+    int burstTime;
+    int priority;
+    int remainingBurstTime;
+    int completionTime;
+    int turnAroundTime;
+    int waitingTime;
+    int startTime;
+    bool hasStarted;
+    bool isCompleted;
+    int lastExecutedTime;
+
+    Process(int id, int arrivalTime, int burstTime, int priority = 0)
+        : id(id), arrivalTime(arrivalTime), burstTime(burstTime), priority(priority),
+          remainingBurstTime(burstTime),
+          completionTime(0), waitingTime(0), turnAroundTime(0),
+          startTime(-1), hasStarted(false), isCompleted(false),
+          lastExecutedTime(arrivalTime) {}
+
+    void reset() {
+        remainingBurstTime = burstTime;
+        completionTime = 0;
+        turnAroundTime = 0;
+        waitingTime = 0;
+        startTime = -1;
+        hasStarted = false;
+        isCompleted = false;
+        lastExecutedTime = arrivalTime;
+    }
+
+    void display() const {
+        cout << setw(10) << id
+             << setw(15) << arrivalTime
+             << setw(12) << burstTime
+             << setw(10) << priority
+             << setw(17) << completionTime
+             << setw(17) << turnAroundTime
+             << setw(15) << waitingTime
+             << endl;
+    }
+};
+
+class Scheduler {
+protected:
+    vector<Process> processes;
+    string name;
+
+public:
+    Scheduler(const string& name) : name(name) {}
+
+    void setProcesses(const vector<Process>& procs) {
+        processes = procs;
+        for (auto& p : processes) {
+            p.reset();
+        }
+    }
+
+    virtual void Schedule() = 0;
+
+    void displayResults(const string& header) const {
+        cout << "\n--- " << header << " ---\n";
+        cout << "\nProcess ID | Arrival Time | Burst Time | Priority | Completion Time | Turnaround Time | Waiting Time\n";
+        cout << "-------------------------------------------------------------------------------------------------------\n";
+
+        vector<Process> sortedProcesses = processes;
+        sort(sortedProcesses.begin(), sortedProcesses.end(), [](const Process& a, const Process& b) {
+            return a.id < b.id;
+        });
+
+        float totalTurnaroundTime = 0;
+        float totalWaitingTime = 0;
+
+        for (const auto& p : sortedProcesses) {
+            p.display();
+            totalTurnaroundTime += p.turnAroundTime;
+            totalWaitingTime += p.waitingTime;
+        }
+
+        cout << fixed << setprecision(2);
+        cout << "\nAverage Turnaround Time: " << totalTurnaroundTime / processes.size() << endl;
+        cout << "Average Waiting Time: " << totalWaitingTime / processes.size() << endl;
+    }
+
+    pair<double, double> getAverageTimes() const {
+        double totalTurnaroundTime = 0;
+        double totalWaitingTime = 0;
+
+        for (const auto& p : processes) {
+            totalTurnaroundTime += p.turnAroundTime;
+            totalWaitingTime += p.waitingTime;
+        }
+        return {totalTurnaroundTime / processes.size(), totalWaitingTime / processes.size()};
+    }
+
+    string getName() const { return name; }
+};
+
+class FCFS_SCHEDULER : public Scheduler {
+public:
+    FCFS_SCHEDULER() : Scheduler("FCFS") {}
+
+    void Schedule() override {
+        sort(processes.begin(), processes.end(), [](const Process& a, const Process& b) {
+            return a.arrivalTime < b.arrivalTime;
+        });
+
+        int currentTime = 0;
+        cout << "\n--- FCFS Scheduling ---\n";
+        cout << "\nGantt Chart:\n|";
+
+        for (auto& p : processes) {
+            if (currentTime < p.arrivalTime) {
+                cout << " Idle (" << p.arrivalTime - currentTime << ") |";
+                currentTime = p.arrivalTime;
+            }
+            p.startTime = currentTime;
+            p.completionTime = currentTime + p.burstTime;
+            p.turnAroundTime = p.completionTime - p.arrivalTime;
+            p.waitingTime = p.turnAroundTime - p.burstTime;
+            currentTime = p.completionTime;
+            cout << " P" << p.id << " (" << p.burstTime << ") |";
+        }
+        cout << "\n\n";
+    }
+};
+
+class SRTF_SCHEDULER : public Scheduler {
+public:
+    SRTF_SCHEDULER() : Scheduler("SRTF") {}
+
+    void Schedule() override {
+        int currentTime = 0;
+        int completedProcessesCount = 0;
+        int numProcesses = processes.size();
+
+        cout << "\n--- Shortest Remaining Time First (SRTF) Scheduling (Preemptive) ---\n";
+        cout << "\nGantt Chart:\n";
+        cout << "|";
+
+        int currentExecutingProcessId = -1;
+        int lastSwitchTime = 0;
+
+        while (completedProcessesCount < numProcesses) {
+            int shortestJobIndex = -1;
+            int minRemainingBurst = 999999;
+
+            for (int i = 0; i < numProcesses; ++i) {
+                if (processes[i].arrivalTime <= currentTime && !processes[i].isCompleted) {
+                    if (processes[i].remainingBurstTime < minRemainingBurst) {
+                        minRemainingBurst = processes[i].remainingBurstTime;
+                        shortestJobIndex = i;
+                    }
+                }
+            }
+
+            if (shortestJobIndex == -1) {
+                if (currentExecutingProcessId != -1) {
+                    cout << " P" << currentExecutingProcessId << " (" << currentTime - lastSwitchTime << ") |";
+                    lastSwitchTime = currentTime;
+                    currentExecutingProcessId = -1;
+                }
+
+                int nextArrivalTime = 999999;
+                bool foundUncompletedProcess = false;
+                for (int i = 0; i < numProcesses; ++i) {
+                    if (!processes[i].isCompleted) {
+                        foundUncompletedProcess = true;
+                        if (processes[i].arrivalTime < nextArrivalTime) {
+                            nextArrivalTime = processes[i].arrivalTime;
+                        }
+                    }
+                }
+
+                if (foundUncompletedProcess && nextArrivalTime > currentTime) {
+                    cout << " Idle (" << nextArrivalTime - currentTime << ") |";
+                    currentTime = nextArrivalTime;
+                    lastSwitchTime = currentTime;
+                } else {
+                    currentTime++;
+                }
+                continue;
+            }
+
+            if (currentExecutingProcessId != processes[shortestJobIndex].id) {
+                if (currentExecutingProcessId != -1) {
+                    cout << " P" << currentExecutingProcessId << " (" << currentTime - lastSwitchTime << ") |";
+                }
+                currentExecutingProcessId = processes[shortestJobIndex].id;
+                lastSwitchTime = currentTime;
+
+                if (!processes[shortestJobIndex].hasStarted) {
+                    processes[shortestJobIndex].startTime = currentTime;
+                    processes[shortestJobIndex].hasStarted = true;
+                }
+            }
+
+            processes[shortestJobIndex].remainingBurstTime--;
+            currentTime++;
+
+            if (processes[shortestJobIndex].remainingBurstTime == 0) {
+                processes[shortestJobIndex].isCompleted = true;
+                processes[shortestJobIndex].completionTime = currentTime;
+                processes[shortestJobIndex].turnAroundTime = processes[shortestJobIndex].completionTime - processes[shortestJobIndex].arrivalTime;
+                processes[shortestJobIndex].waitingTime = processes[shortestJobIndex].turnAroundTime - processes[shortestJobIndex].burstTime;
+
+                completedProcessesCount++;
+
+                cout << " P" << processes[shortestJobIndex].id << " (" << currentTime - lastSwitchTime << ") |";
+                lastSwitchTime = currentTime;
+
+                currentExecutingProcessId = -1;
+            }
+        }
+        cout << "\n\n";
+    }
+};
+
+class RR_SCHEDULER : public Scheduler {
+private:
+    int timeQuantum;
+
+public:
+    RR_SCHEDULER(int quantum) : Scheduler("Round Robin"), timeQuantum(quantum) {}
+
+    void Schedule() override {
+        int currentTime = 0;
+        int completedProcessesCount = 0;
+        int numProcesses = processes.size();
+
+        queue<int> readyQueue;
+
+        sort(processes.begin(), processes.end(), [](const Process& a, const Process& b) {
+            return a.arrivalTime < b.arrivalTime;
+        });
+
+        cout << "\n--- Round Robin (RR) Scheduling ---\n";
+        cout << "Time Quantum: " << timeQuantum << "\n";
+        cout << "\nGantt Chart:\n";
+        cout << "|";
+
+        int processArrivalPointer = 0;
+
+        int currentExecutingProcessId = -1;
+        int lastSwitchTime = 0;
+
+        vector<bool> inQueue(numProcesses, false);
+
+        while (completedProcessesCount < numProcesses) {
+            while (processArrivalPointer < numProcesses &&
+                   processes[processArrivalPointer].arrivalTime <= currentTime) {
+                if (!inQueue[processArrivalPointer] && !processes[processArrivalPointer].isCompleted) {
+                    readyQueue.push(processArrivalPointer);
+                    inQueue[processArrivalPointer] = true;
+                }
+                processArrivalPointer++;
+            }
+
+            if (readyQueue.empty()) {
+                if (currentExecutingProcessId != -1) {
+                    cout << " P" << currentExecutingProcessId << " (" << currentTime - lastSwitchTime << ") |";
+                    lastSwitchTime = currentTime;
+                    currentExecutingProcessId = -1;
+                }
+
+                int nextArrivalTime = 999999;
+                bool foundUnarrivedProcess = false;
+                for (int i = 0; i < numProcesses; ++i) {
+                    if (!processes[i].isCompleted && processes[i].arrivalTime > currentTime) {
+                        foundUnarrivedProcess = true;
+                        if (processes[i].arrivalTime < nextArrivalTime) {
+                            nextArrivalTime = processes[i].arrivalTime;
+                        }
+                    }
+                }
+
+                if (foundUnarrivedProcess && nextArrivalTime != 999999) {
+                    cout << " Idle (" << nextArrivalTime - currentTime << ") |";
+                    currentTime = nextArrivalTime;
+                    lastSwitchTime = currentTime;
+                } else {
+                    currentTime++;
+                }
+                continue;
+            }
+
+            int currentProcessIndex = readyQueue.front();
+            readyQueue.pop();
+            inQueue[currentProcessIndex] = false;
+
+            Process& p = processes[currentProcessIndex];
+
+            if (currentExecutingProcessId != p.id) {
+                 if (currentExecutingProcessId != -1) {
+                    cout << " P" << currentExecutingProcessId << " (" << currentTime - lastSwitchTime << ") |";
+                }
+                currentExecutingProcessId = p.id;
+                lastSwitchTime = currentTime;
+            }
+
+            if (!p.hasStarted) {
+                p.startTime = currentTime;
+                p.hasStarted = true;
+            }
+
+            p.waitingTime += (currentTime - p.lastExecutedTime);
+
+            int executionTime = min(timeQuantum, p.remainingBurstTime);
+            p.remainingBurstTime -= executionTime;
+            currentTime += executionTime;
+
+            while (processArrivalPointer < numProcesses &&
+                   processes[processArrivalPointer].arrivalTime <= currentTime) {
+                if (!inQueue[processArrivalPointer] && !processes[processArrivalPointer].isCompleted) {
+                    readyQueue.push(processArrivalPointer);
+                    inQueue[processArrivalPointer] = true;
+                }
+                processArrivalPointer++;
+            }
+
+            if (p.remainingBurstTime == 0) {
+                p.isCompleted = true;
+                p.completionTime = currentTime;
+                p.turnAroundTime = p.completionTime - p.arrivalTime;
+                completedProcessesCount++;
+
+                cout << " P" << p.id << " (" << currentTime - lastSwitchTime << ") |";
+                lastSwitchTime = currentTime;
+                currentExecutingProcessId = -1;
+            } else {
+                readyQueue.push(currentProcessIndex);
+                inQueue[currentProcessIndex] = true;
+                p.lastExecutedTime = currentTime;
+
+                cout << " P" << p.id << " (" << currentTime - lastSwitchTime << ") |";
+                lastSwitchTime = currentTime;
+            }
+        }
+        cout << "\n\n";
+    }
+};
+
+class NON_PREEMPTIVE_PRIORITY_SCHEDULER : public Scheduler {
+public:
+    NON_PREEMPTIVE_PRIORITY_SCHEDULER() : Scheduler("Non-Preemptive Priority") {}
+
+    void Schedule() override {
+        int currentTime = 0;
+        int completedProcessesCount = 0;
+        int numProcesses = processes.size();
+
+        cout << "\n--- Non-Preemptive Priority Scheduling ---\n";
+        cout << "\nGantt Chart:\n";
+        cout << "|";
+
+        while (completedProcessesCount < numProcesses) {
+            int highestPriorityIndex = -1;
+            int minPriority = 999999;
+
+            for (int i = 0; i < numProcesses; ++i) {
+                if (processes[i].arrivalTime <= currentTime && !processes[i].isCompleted) {
+                    if (processes[i].priority < minPriority) {
+                        minPriority = processes[i].priority;
+                        highestPriorityIndex = i;
+                    }
+                    else if (processes[i].priority == minPriority) {
+                        if (highestPriorityIndex == -1 || processes[i].arrivalTime < processes[highestPriorityIndex].arrivalTime) {
+                             highestPriorityIndex = i;
+                        }
+                    }
+                }
+            }
+
+            if (highestPriorityIndex == -1) {
+                int nextArrivalTime = 999999;
+                bool foundUncompletedProcess = false;
+                for (int i = 0; i < numProcesses; ++i) {
+                    if (!processes[i].isCompleted && processes[i].arrivalTime > currentTime) {
+                        foundUncompletedProcess = true;
+                        if (processes[i].arrivalTime < nextArrivalTime) {
+                            nextArrivalTime = processes[i].arrivalTime;
+                        }
+                    }
+                }
+
+                if (foundUncompletedProcess && nextArrivalTime != 999999) {
+                    cout << " Idle (" << nextArrivalTime - currentTime << ") |";
+                    currentTime = nextArrivalTime;
+                } else {
+                    currentTime++;
+                }
+                continue;
+            }
+
+            Process& p = processes[highestPriorityIndex];
+
+            if (currentTime < p.arrivalTime) {
+                cout << " Idle (" << p.arrivalTime - currentTime << ") |";
+                currentTime = p.arrivalTime;
+            }
+
+            p.startTime = currentTime;
+            p.completionTime = currentTime + p.burstTime;
+            p.turnAroundTime = p.completionTime - p.arrivalTime;
+            p.waitingTime = p.turnAroundTime - p.burstTime;
+            p.isCompleted = true;
+
+            currentTime = p.completionTime;
+            completedProcessesCount++;
+
+            cout << " P" << p.id << " (" << p.burstTime << ") |";
+        }
+        cout << "\n\n";
+    }
+};
+
+int main() {
+    vector<Process> initialProcesses;
+    int n;
+    cout << "Enter number of processes: ";
+    cin >> n;
+
+    for (int i = 0; i < n; i++) {
+        int arrivalTime, burstTime, priority;
+        cout << "\nEnter details for Process " << i + 1 << ":\n";
+        cout << "Arrival Time: ";
+        cin >> arrivalTime;
+        cout << "Burst Time: ";
+        cin >> burstTime;
+        cout << "Priority (lower number = higher priority, enter 0 if not applicable): ";
+        cin >> priority;
+
+        initialProcesses.emplace_back(i + 1, arrivalTime, burstTime, priority);
+    }
+
+    FCFS_SCHEDULER fcfsScheduler;
+    fcfsScheduler.setProcesses(initialProcesses);
+    fcfsScheduler.Schedule();
+    fcfsScheduler.displayResults("FCFS Results");
+
+    SRTF_SCHEDULER srtfScheduler;
+    srtfScheduler.setProcesses(initialProcesses);
+    srtfScheduler.Schedule();
+    srtfScheduler.displayResults("SRTF Results");
+
+    int quantum;
+    cout << "\nEnter time quantum for Round Robin: ";
+    cin >> quantum;
+    RR_SCHEDULER rrScheduler(quantum);
+    rrScheduler.setProcesses(initialProcesses);
+    rrScheduler.Schedule();
+    rrScheduler.displayResults("Round Robin Results");
+
+    NON_PREEMPTIVE_PRIORITY_SCHEDULER nppScheduler;
+    nppScheduler.setProcesses(initialProcesses);
+    nppScheduler.Schedule();
+    nppScheduler.displayResults("Non-Preemptive Priority Results");
+
+    cout << "\n\n--- Scheduling Algorithm Comparison ---\n";
+    cout << fixed << setprecision(2);
+    cout << setw(30) << "Algorithm" << setw(20) << "Avg TAT" << setw(20) << "Avg WT" << endl;
+    cout << string(70, '-') << endl;
+
+    vector<Scheduler*> schedulers = {&fcfsScheduler, &srtfScheduler, &rrScheduler, &nppScheduler};
+
+    for (Scheduler* s : schedulers) {
+        pair<double, double> avgTimes = s->getAverageTimes();
+        cout << setw(30) << s->getName()
+             << setw(20) << avgTimes.first
+             << setw(20) << avgTimes.second << endl;
+    }
+
+    return 0;
+}
